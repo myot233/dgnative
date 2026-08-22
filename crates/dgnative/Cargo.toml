@@ -1,0 +1,33 @@
+[package]
+name = "dgnative"
+description = "Rust implementation of the DG-LAB Coyote V2/V3 pulse host Bluetooth protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+uuid.workspace = true
+
+# ble feature
+btleplug = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["time"] }
+
+[features]
+default = ["ble"]
+# BLE transport (btleplug). Disable for pure protocol codec with no IO.
+ble = ["dep:btleplug", "dep:tokio", "dep:futures"]
+
+[dev-dependencies]
+# Runtime pieces only examples/coyote3_demo needs.
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "sync",
+] }
+
+[[example]]
+name = "coyote3_demo"
+required-features = ["ble"]

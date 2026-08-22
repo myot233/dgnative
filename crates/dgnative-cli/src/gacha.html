@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dgnative gacha wheel</title>
+<style>
+  :root {
+    --bg: #14171d;
+    --panel: #1d222b;
+    --line: #2c333f;
+    --text: #e6e9ef;
+    --muted: #8b95a7;
+    --accent: #d97a34;
+    --danger: #c8443c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 16px 48px;
+    gap: 20px;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: .04em; }
+  .sub { color: var(--muted); font-size: 13px; margin: -12px 0 0; }
+
+  .wheel-wrap { position: relative; width: min(88vw, 420px); aspect-ratio: 1; }
+  canvas { width: 100%; height: 100%; display: block; }
+  .pointer {
+    position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 13px solid transparent;
+    border-right: 13px solid transparent;
+    border-top: 24px solid var(--text);
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,.5));
+  }
+  .hub {
+    position: absolute; inset: 0; margin: auto;
+    width: 34%; height: 34%; border-radius: 50%;
+    background: var(--panel); border: 2px solid var(--line);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; text-align: center; padding: 8px;
+  }
+  .hub .label { font-size: 17px; font-weight: 600; }
+  .hub .detail { font-size: 11px; color: var(--muted); }
+
+  .controls { display: flex; gap: 12px; }
+  button {
+    font: inherit; font-weight: 600; color: var(--text);
+    padding: 12px 30px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel);
+    transition: transform .06s, opacity .15s;
+  }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #spin { background: var(--accent); border-color: var(--accent); color: #16120c; }
+  #stop { background: var(--danger); border-color: var(--danger); }
+
+  .status {
+    width: min(88vw, 420px); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+    font-size: 13px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .row { display: flex; justify-content: space-between; gap: 12px; }
+  .row span:first-child { color: var(--muted); }
+  .bar { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
+  .mono { font-variant-numeric: tabular-nums; }
+
+  table { width: min(88vw, 420px); border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 7px; }
+</style>
+</head>
+<body>
+
+<h1>dgnative gacha wheel</h1>
+<p class="sub">Prize strength is a percentage of the soft limit; the wheel never outputs above it</p>
+
+<div class="wheel-wrap">
+  <canvas id="wheel" width="840" height="840"></canvas>
+  <div class="pointer"></div>
+  <div class="hub">
+    <div class="label" id="hubLabel">Ready</div>
+    <div class="detail" id="hubDetail">Press the button below</div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="spin">S P I N</button>
+  <button id="stop">S T O P</button>
+</div>
+
+<div class="status">
+  <div class="row"><span>Devices</span><span id="devices" class="mono">—</span></div>
+  <div class="row"><span>Soft limit</span><span id="limit" class="mono">—</span></div>
+  <div class="row"><span>Current strength</span><span id="strength" class="mono">—</span></div>
+  <div class="bar"><i id="bar"></i></div>
+</div>
+
+<table>
+  <thead><tr><th>Prize</th><th>Waveform</th><th class="n">Strength</th><th class="n">Duration</th><th class="n">Chance</th></tr></thead>
+  <tbody id="prizeTable"></tbody>
+</table>
+
+<script>
+// Display labels for the built-in waveforms; must match `builtin::ALL` in the library.
+const WAVE_NAMES = {
+  breathing: "Breathing", tide: "Tide", full: "Full power", staccato: "Staccato",
+  pulse: "Heartbeat", ramp: "Ramp", steps: "Steps", flutter: "Flutter",
+};
+
+let prizes = [];
+let angles = [];      // [start, end] radians of each segment
+let rotation = 0;     // current wheel angle
+let spinning = false;
+
+const canvas = document.getElementById("wheel");
+const ctx = canvas.getContext("2d");
+
+// Segment size follows weight: likelier prizes get larger segments, so visuals match probability
+function layout() {
+  const total = prizes.reduce((s, p) => s + p.weight, 0);
+  let at = -Math.PI / 2;   // start straight up (pointer position)
+  angles = prizes.map(p => {
+    const span = (p.weight / total) * Math.PI * 2;
+    const seg = [at, at + span];
+    at += span;
+    return seg;
+  });
+}
+
+function drawWheel() {
+  const size = canvas.width;
+  const r = size / 2;
+  ctx.clearRect(0, 0, size, size);
+  ctx.save();
+  ctx.translate(r, r);
+  ctx.rotate(rotation);
+
+  prizes.forEach((p, i) => {
+    const [a0, a1] = angles[i];
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, r - 6, a0, a1);
+    ctx.closePath();
+    ctx.fillStyle = p.color;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,.35)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Labels run along the radius: text length extends toward the center, so segment
+    // width does not limit it; the font size must fit inside the segment's arc width,
+    // otherwise text from adjacent segments overlaps
+    const span = a1 - a0;
+    const labelR = r * 0.72;              // radius of the label center
+    const arc = span * labelR;            // arc width available there
+    const size = Math.max(17, Math.min(38, arc * 0.5));
+
+    ctx.save();
+    ctx.rotate((a0 + a1) / 2);
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(255,255,255,.96)";
+    ctx.font = `600 ${size}px -apple-system, 'PingFang SC', sans-serif`;
+
+    // Second line only when the arc is tall enough, otherwise keep just the prize name (the table always shows it)
+    if (arc > size * 2.5) {
+      ctx.fillText(p.label, r - 26, -size * 0.5);
+      ctx.font = `500 ${size * 0.62}px -apple-system, 'PingFang SC', sans-serif`;
+      ctx.fillStyle = "rgba(255,255,255,.74)";
+      ctx.fillText(`${p.strength_pct}% / ${p.seconds}s`, r - 26, size * 0.6);
+    } else {
+      ctx.fillText(p.label, r - 26, 0);
+    }
+    ctx.restore();
+  });
+
+  ctx.restore();
+}
+
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+
+// Rotate the center of segment `index` to the pointer (straight up)
+function spinTo(index, ms = 4200) {
+  return new Promise(resolve => {
+    const [a0, a1] = angles[index];
+    const center = (a0 + a1) / 2;
+    // Target: rotation + center ≡ -π/2 (mod 2π), plus 5 extra turns
+    const twoPi = Math.PI * 2;
+    let delta = (-Math.PI / 2 - center - rotation) % twoPi;
+    if (delta < 0) delta += twoPi;
+    const target = rotation + delta + twoPi * 5;
+
+    const from = rotation, start = performance.now();
+    function frame(now) {
+      const t = Math.min(1, (now - start) / ms);
+      rotation = from + (target - from) * easeOut(t);
+      drawWheel();
+      if (t < 1) requestAnimationFrame(frame);
+      else { rotation %= twoPi; resolve(); }
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+function renderTable() {
+  const total = prizes.reduce((s, p) => s + p.weight, 0);
+  document.getElementById("prizeTable").innerHTML = prizes.map(p => `
+    <tr>
+      <td><span class="swatch" style="background:${p.color}"></span>${p.label}</td>
+      <td>${WAVE_NAMES[p.wave] || p.wave}</td>
+      <td class="n">${p.strength_pct}%</td>
+      <td class="n">${p.seconds}s</td>
+      <td class="n">${(p.weight / total * 100).toFixed(1)}%</td>
+    </tr>`).join("");
+}
+
+async function refreshStatus() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    document.getElementById("devices").textContent =
+      s.devices.length ? s.devices.join(" / ") : "none";
+    document.getElementById("limit").textContent = s.limit;
+    document.getElementById("strength").textContent =
+      s.strengths.map(([a, b]) => `A${a} B${b}`).join("  ") || "—";
+
+    // Do not overwrite the hub while spinning, to avoid fighting the result display
+    if (!spinning) {
+      const bar = document.getElementById("bar");
+      if (s.playing) {
+        document.getElementById("hubLabel").textContent = s.playing;
+        document.getElementById("hubDetail").textContent =
+          (s.remaining_ms / 1000).toFixed(1) + "s";
+        bar.style.width = s.total_ms
+          ? (100 - s.remaining_ms / s.total_ms * 100).toFixed(1) + "%" : "0";
+      } else {
+        document.getElementById("hubLabel").textContent = "Ready";
+        document.getElementById("hubDetail").textContent = "Press the button below";
+        bar.style.width = "0";
+      }
+    }
+  } catch (e) { /* service exited, ignore */ }
+}
+
+document.getElementById("spin").onclick = async () => {
+  if (spinning) return;
+  spinning = true;
+  const btn = document.getElementById("spin");
+  btn.disabled = true;
+  document.getElementById("hubLabel").textContent = "…";
+  document.getElementById("hubDetail").textContent = "";
+
+  try {
+    // The server picks the result and starts output immediately; the animation just turns the pointer there
+    const r = await (await fetch("/api/spin", { method: "POST" })).json();
+    await spinTo(r.index);
+    document.getElementById("hubLabel").textContent = r.prize.label;
+    document.getElementById("hubDetail").textContent =
+      `${r.prize.strength_pct}% / ${r.prize.seconds}s`;
+  } finally {
+    spinning = false;
+    btn.disabled = false;
+  }
+};
+
+document.getElementById("stop").onclick = () =>
+  fetch("/api/stop", { method: "POST" });
+
+(async () => {
+  prizes = await (await fetch("/api/prizes")).json();
+  layout();
+  drawWheel();
+  renderTable();
+  refreshStatus();
+  setInterval(refreshStatus, 250);
+})();
+</script>
+</body>
+</html>
