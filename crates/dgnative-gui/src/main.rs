@@ -25,12 +25,12 @@ struct Args {
     #[arg(long, short = 'L', default_value_t = 20)]
     limit: u8,
 
-    /// Timeout in seconds for scanning / connecting to a device
-    #[arg(long, short = 't', default_value_t = 15)]
+    /// Seconds each scan runs for; the button stays busy that whole time
+    #[arg(long, short = 't', default_value_t = 8)]
     timeout: u64,
 
-    /// Id of the device to connect to (a prefix is enough); omit to take the
-    /// strongest signal
+    /// Id of the device to connect to (a prefix is enough); given here, the
+    /// picker is skipped and the device is connected at startup
     #[arg(long, short = 'D')]
     device: Option<String>,
 

@@ -140,21 +140,35 @@ async fn run(
 
         match command {
             Command::Scan => {
+                log(format_args!("scanning for {:?}", options.timeout));
                 let _ = updates.unbounded_send(Update::Scanning);
                 match discover(options.timeout).await {
                     Ok(found) => {
+                        log(format_args!("scan found {} device(s)", found.len()));
+                        for device in &found {
+                            log(format_args!(
+                                "  {} {} rssi={:?} supported={}",
+                                device.id,
+                                device.local_name,
+                                device.rssi,
+                                is_supported(device)
+                            ));
+                        }
                         known = found;
                         let _ = updates
                             .unbounded_send(Update::Found(known.iter().map(describe).collect()));
-                        if let Some(prefix) = autoconnect.take()
-                            && let Some(hit) = known
+                        if let Some(prefix) = autoconnect.take() {
+                            match known
                                 .iter()
                                 .find(|d| d.id.starts_with(&prefix) && is_supported(d))
-                        {
-                            pending = Some(Command::Connect(hit.id.clone()));
+                            {
+                                Some(hit) => pending = Some(Command::Connect(hit.id.clone())),
+                                None => log(format_args!("no device matches -D {prefix}")),
+                            }
                         }
                     }
                     Err(err) => {
+                        log(format_args!("scan failed: {err}"));
                         let _ = updates.unbounded_send(Update::Failed(err.to_string()));
                         let _ = updates.unbounded_send(Update::Idle);
                     }
@@ -162,16 +176,20 @@ async fn run(
             }
             Command::Connect(id) => {
                 let Some(target) = known.iter().find(|d| d.id == id).cloned() else {
+                    log(format_args!("{id} is no longer in the scan results"));
                     let _ = updates.unbounded_send(Update::Failed("device is gone".into()));
                     continue;
                 };
+                log(format_args!("connecting to {id}"));
                 let _ = updates.unbounded_send(Update::Connecting(short(&target.id)));
                 match Coyote3::connect_peripheral(target.peripheral.clone()).await {
                     Ok(coyote) => {
                         session(coyote, limit, &mut commands, &updates, &mut limit).await;
+                        log(format_args!("session with {id} ended"));
                         let _ = updates.unbounded_send(Update::Idle);
                     }
                     Err(err) => {
+                        log(format_args!("connect failed: {err}"));
                         let _ = updates.unbounded_send(Update::Failed(err.to_string()));
                         let _ = updates.unbounded_send(Update::Idle);
                     }
@@ -194,9 +212,11 @@ async fn session(
     limit_out: &mut u8,
 ) {
     if let Err(err) = coyote.set_config(&Bf::with_limits(limit, limit)).await {
+        log(format_args!("BF write failed: {err}"));
         let _ = updates.unbounded_send(Update::Failed(err.to_string()));
         return;
     }
+    log(format_args!("connected, soft limit {limit} written"));
 
     let _ = updates.unbounded_send(Update::Connected(short(&coyote.id())));
     if let Ok(battery) = coyote.battery_level().await {
@@ -319,6 +339,12 @@ fn is_supported(device: &Discovered) -> bool {
 
 fn short(id: &str) -> String {
     id.chars().take(8).collect()
+}
+
+/// The window has no console of its own, so the BLE side reports to stderr.
+/// Run the binary from a terminal to see why a scan or a connection failed.
+fn log(args: std::fmt::Arguments) {
+    eprintln!("[device] {args}");
 }
 
 /// Offline stand-in: fake scan results plus an echo of the requested strengths,
