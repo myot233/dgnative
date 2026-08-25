@@ -7,12 +7,14 @@ every codec path is checked against the HEX examples given there as test vectors
 
 ## Structure
 
-This is a cargo workspace; the library and the command-line tool are two separate crates:
+This is a cargo workspace; the library, the command-line tool and the desktop UI
+are separate crates:
 
 | crate | Contents |
 |---|---|
 | `crates/dgnative` | Library: protocol codec + BLE transport, the only part published to crates.io |
 | `crates/dgnative-cli` | The `dgnative` command-line tool, built solely on the library's public API |
+| `crates/dgnative-gui` | `dgnative-gui`, a [gpui](https://www.gpui.rs/) desktop window over the same API (macOS and Linux) |
 
 Inside the library:
 
@@ -29,6 +31,17 @@ your own BLE stack, a WebSocket relay, or an embedded target:
 ```toml
 dgnative = { version = "0.1", default-features = false }          # protocol only
 dgnative = { version = "0.1", default-features = false, features = ["ble"] }
+```
+
+## Prebuilt binaries
+
+Every commit on `main` refreshes the `rolling` prerelease with binaries for
+linux-x86_64, macos-aarch64, macos-x86_64 and windows-x86_64 (CLI only on
+Windows, because gpui does not support it). They are unsigned, so macOS needs
+the quarantine flag cleared before the first run:
+
+```sh
+xattr -d com.apple.quarantine dgnative dgnative-gui
 ```
 
 ## Command-line tool
@@ -134,6 +147,33 @@ Sources outside the allowlist always get a 403, with the source IP printed to th
 
 Note that this is a subnet-level allowlist with no authentication: anyone inside an
 allowed subnet can spin the wheel. Only open it up on networks you trust.
+
+## Desktop UI
+
+```sh
+cargo run -p dgnative-gui             # or dgnative-gui from a release archive
+cargo run -p dgnative-gui -- --offline
+```
+
+A single window: scan, pick a device from the list, then two channel cards with
+`-` / `+`, a waveform picker, the soft limit, and a STOP button that zeroes both
+channels. Same defaults as the CLI — soft limit 20, both channels start at 0 —
+and the same keys: `up`/`down` adjust, `space` zeroes, `a` / `b` / `o` choose
+which channels the buttons act on.
+
+Only pulse host 3.0 can be driven; a 2.0 host or a wireless sensor shows up in
+the scan list marked `3.0 only`. Disconnecting zeroes the device first.
+
+`--offline` runs the whole flow against a simulator: the scan returns two fake
+devices and strengths are echoed back as if the hardware confirmed them. Use it
+to work on the window with nothing attached. `-D/--device <prefix>` skips the
+picker and connects to a known device at startup.
+
+The UI is built with [gpui](https://www.gpui.rs/), which supports macOS and
+Linux only. On Linux it needs the usual desktop development packages
+(`libwayland-dev`, `libxkbcommon-dev`, `libx11-dev`, `libfontconfig1-dev`,
+`libfreetype6-dev`, `libasound2-dev`); see `.github/workflows/ci.yml` for the
+exact list CI installs.
 
 ## V3 usage
 

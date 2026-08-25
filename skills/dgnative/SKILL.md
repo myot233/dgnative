@@ -20,6 +20,7 @@ Cargo workspace, two crates:
 |---|---|
 | `crates/dgnative` | Library. `protocol::v2` / `protocol::v3` codecs (no IO) + `ble` transport behind the optional `ble` feature (on by default). |
 | `crates/dgnative-cli` | Binary `dgnative`. `main.rs` (commands) + `gacha.rs` / `gacha.html` (web wheel). Depends only on the library's public API. |
+| `crates/dgnative-gui` | Binary `dgnative-gui`. gpui window: `state.rs` (pure, unit-tested UI rules), `device.rs` (tokio thread running scan + the 100ms loop), `ui.rs` (render). macOS and Linux only. |
 
 Protocol source of truth: [DG-LAB-OPENSOURCE](https://github.com/DG-LAB-OPENSOURCE/DG-LAB-OPENSOURCE).
 Every V3/V2 codec path is checked against the HEX vectors from those docs.
@@ -107,5 +108,7 @@ Key types: `B0 { sequence, action_a, action_b, pulses_a, pulses_b }` (20-byte en
 - Add a waveform: `crates/dgnative/src/protocol/v3/builtin.rs` (`Builtin` const + `ALL`). Set `official: false` unless the frame data really comes from the official app. `WAVE_NAMES` in `gacha.html` must list the same display label.
 - Add a gacha prize: the `PRIZES` table in `crates/dgnative-cli/src/gacha.rs`. Strength is a **percentage of the soft limit**, never an absolute value. Two tests guard it: `prize_table_is_valid` (waveform exists, percentage in range, non-zero weight) and `narrowest_segment_stays_readable` (thinnest wheel segment stays ≥ 7°).
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features`, `cargo test --workspace --all-features`. Also build `cargo build -p dgnative --no-default-features` — the protocol layer must stay IO-free.
-- Verify UI changes for real: `dgnative gacha --offline` and load the page. Verify CLI text changes by running the command, not by reading the source.
+- GUI work: keep decision rules in `state.rs` (pure, testable) and out of `ui.rs`; the render pass must stay a projection of `UiState`. `device.rs` is the only place that touches BLE, and it runs on its own tokio thread — never block the gpui thread.
+- Verify UI changes for real: `dgnative gacha --offline` and load the page; `dgnative-gui --offline` for the window, which fakes a scan and echoes strengths. Verify CLI text changes by running the command, not by reading the source.
 - `examples/coyote3_demo.rs` in the library crate is the reference control loop; keep it working when the API changes.
+- CI (`.github/workflows/ci.yml`) runs fmt, clippy `-D warnings`, tests and the no-default-features build, then builds release binaries for linux-x86_64, macos-aarch64, macos-x86_64 and windows-x86_64 and refreshes the `rolling` prerelease. Windows gets the CLI only, since gpui is macOS/Linux. Adding a dependency that needs system libraries means updating the apt list in both jobs.

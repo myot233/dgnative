@@ -1,0 +1,19 @@
+[package]
+name = "dgnative-gui"
+description = "Desktop UI for controlling the DG-LAB Coyote V3 pulse host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dgnative-gui"
+path = "src/main.rs"
+
+[dependencies]
+dgnative = { workspace = true, features = ["ble"] }
+
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+futures.workspace = true
+gpui = "0.2.2"
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }

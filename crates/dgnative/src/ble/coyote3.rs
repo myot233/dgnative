@@ -98,6 +98,12 @@ impl Coyote3 {
         &self.peripheral
     }
 
+    /// Device id, matching [`Discovered::id`](crate::ble::Discovered::id): the
+    /// MAC address on Linux / Windows, the CoreBluetooth UUID on macOS.
+    pub fn id(&self) -> String {
+        self.peripheral.id().to_string()
+    }
+
     /// Write one B0 command (should be called every 100ms to keep the output alive).
     pub async fn send(&self, cmd: &B0) -> Result<()> {
         self.write(&cmd.encode()).await
