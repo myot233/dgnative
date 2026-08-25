@@ -13,6 +13,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A stalled crates.io transfer once broke a release build. Retry hard, and
+  # do not abort a download just because it is briefly slow (cargo's default
+  # gives up after 30s under 10 bytes/s).
+  CARGO_NET_RETRY: 10
+  CARGO_HTTP_LOW_SPEED_LIMIT: 0
 
 jobs:
   check:
@@ -79,6 +84,11 @@ jobs:
             cmake clang libasound2-dev libfontconfig1-dev libfreetype6-dev \
             libwayland-dev libx11-dev libxcb1-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libssl-dev
+
+      # Download everything up front so a registry hiccup fails here, cheaply,
+      # instead of halfway through a 10 minute gpui build.
+      - name: Fetch dependencies
+        run: cargo fetch --locked --target ${{ matrix.target }}
 
       - name: Build CLI
         run: cargo build --release --locked --target ${{ matrix.target }} -p dgnative-cli
