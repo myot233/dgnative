@@ -14,7 +14,7 @@ are separate crates:
 |---|---|
 | `crates/dgnative` | Library: protocol codec + BLE transport, the only part published to crates.io |
 | `crates/dgnative-cli` | The `dgnative` command-line tool, built solely on the library's public API |
-| `crates/dgnative-gui` | `dgnative-gui`, a [gpui](https://www.gpui.rs/) desktop window over the same API (macOS and Linux) |
+| `crates/dgnative-gui` | `dgnative-gui`, a [gpui](https://www.gpui.rs/) desktop window over the same API |
 
 Inside the library:
 
@@ -35,10 +35,10 @@ dgnative = { version = "0.1", default-features = false, features = ["ble"] }
 
 ## Prebuilt binaries
 
-Every commit on `main` refreshes the `rolling` prerelease with binaries for
-linux-x86_64, macos-aarch64, macos-x86_64 and windows-x86_64 (CLI only on
-Windows, because gpui does not support it). They are unsigned, so macOS needs
-the quarantine flag cleared before the first run:
+Every commit on `main` refreshes the `rolling` prerelease with the CLI and the
+desktop UI for linux-x86_64, macos-aarch64, macos-x86_64 and windows-x86_64.
+They are unsigned, so macOS needs the quarantine flag cleared before the first
+run:
 
 ```sh
 xattr -d com.apple.quarantine dgnative dgnative-gui
@@ -169,11 +169,11 @@ devices and strengths are echoed back as if the hardware confirmed them. Use it
 to work on the window with nothing attached. `-D/--device <prefix>` skips the
 picker and connects to a known device at startup.
 
-The UI is built with [gpui](https://www.gpui.rs/), which supports macOS and
-Linux only. On Linux it needs the usual desktop development packages
-(`libwayland-dev`, `libxkbcommon-dev`, `libx11-dev`, `libfontconfig1-dev`,
-`libfreetype6-dev`, `libasound2-dev`); see `.github/workflows/ci.yml` for the
-exact list CI installs.
+The UI is built with [gpui](https://www.gpui.rs/), which renders through Metal
+on macOS, Vulkan on Linux and DirectX on Windows. Building it on Linux needs
+the usual desktop development packages (`libwayland-dev`, `libxkbcommon-dev`,
+`libx11-dev`, `libfontconfig1-dev`, `libfreetype6-dev`, `libasound2-dev`); see
+`.github/workflows/ci.yml` for the exact list CI installs.
 
 ## V3 usage
 

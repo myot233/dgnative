@@ -20,7 +20,7 @@ Cargo workspace, two crates:
 |---|---|
 | `crates/dgnative` | Library. `protocol::v2` / `protocol::v3` codecs (no IO) + `ble` transport behind the optional `ble` feature (on by default). |
 | `crates/dgnative-cli` | Binary `dgnative`. `main.rs` (commands) + `gacha.rs` / `gacha.html` (web wheel). Depends only on the library's public API. |
-| `crates/dgnative-gui` | Binary `dgnative-gui`. gpui window: `state.rs` (pure, unit-tested UI rules), `device.rs` (tokio thread running scan + the 100ms loop), `ui.rs` (render). macOS and Linux only. |
+| `crates/dgnative-gui` | Binary `dgnative-gui`. gpui window: `state.rs` (pure, unit-tested UI rules), `device.rs` (tokio thread running scan + the 100ms loop), `ui.rs` (render). |
 
 Protocol source of truth: [DG-LAB-OPENSOURCE](https://github.com/DG-LAB-OPENSOURCE/DG-LAB-OPENSOURCE).
 Every V3/V2 codec path is checked against the HEX vectors from those docs.
@@ -111,4 +111,4 @@ Key types: `B0 { sequence, action_a, action_b, pulses_a, pulses_b }` (20-byte en
 - GUI work: keep decision rules in `state.rs` (pure, testable) and out of `ui.rs`; the render pass must stay a projection of `UiState`. `device.rs` is the only place that touches BLE, and it runs on its own tokio thread — never block the gpui thread.
 - Verify UI changes for real: `dgnative gacha --offline` and load the page; `dgnative-gui --offline` for the window, which fakes a scan and echoes strengths. Verify CLI text changes by running the command, not by reading the source.
 - `examples/coyote3_demo.rs` in the library crate is the reference control loop; keep it working when the API changes.
-- CI (`.github/workflows/ci.yml`) runs fmt, clippy `-D warnings`, tests and the no-default-features build, then builds release binaries for linux-x86_64, macos-aarch64, macos-x86_64 and windows-x86_64 and refreshes the `rolling` prerelease. Windows gets the CLI only, since gpui is macOS/Linux. Adding a dependency that needs system libraries means updating the apt list in both jobs.
+- CI (`.github/workflows/ci.yml`) runs fmt, clippy `-D warnings`, tests and the no-default-features build, then builds the CLI and the UI for linux-x86_64, macos-aarch64, macos-x86_64 and windows-x86_64 and refreshes the `rolling` prerelease. Adding a dependency that needs system libraries means updating the apt list in both jobs.

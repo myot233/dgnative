@@ -62,11 +62,10 @@ jobs:
             os: macos-latest
             target: x86_64-apple-darwin
             gui: true
-          # gpui supports macOS and Linux only, so Windows ships the CLI alone.
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            gui: false
+            gui: true
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -103,13 +102,13 @@ jobs:
           stage="dgnative-${{ matrix.name }}"
           mkdir -p "dist/$stage"
           bin="target/${{ matrix.target }}/release"
+          ext=""
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "$bin/dgnative.exe" "dist/$stage/"
-          else
-            cp "$bin/dgnative" "dist/$stage/"
-            if [ "${{ matrix.gui }}" = "true" ]; then
-              cp "$bin/dgnative-gui" "dist/$stage/"
-            fi
+            ext=".exe"
+          fi
+          cp "$bin/dgnative$ext" "dist/$stage/"
+          if [ "${{ matrix.gui }}" = "true" ]; then
+            cp "$bin/dgnative-gui$ext" "dist/$stage/"
           fi
           cp README.md "dist/$stage/"
           cd dist
