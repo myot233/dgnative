@@ -132,8 +132,8 @@ impl Dashboard {
         cx.notify();
     }
 
-    fn connect(&mut self, id: String, cx: &mut Context<Self>) {
-        self.state.link = Link::Connecting(id.clone());
+    fn connect(&mut self, id: String, tag: String, cx: &mut Context<Self>) {
+        self.state.link = Link::Connecting(tag);
         self.device.send(Command::Connect(id));
         cx.notify();
     }
@@ -301,13 +301,17 @@ impl Dashboard {
 
         for (index, device) in self.state.devices.iter().enumerate() {
             let id = device.id.clone();
+            let tag = device.tag.clone();
             let busy = self.state.link.is_busy();
-            let connect = button(("connect", index), "connect").px_3().when(
-                device.supported && !busy,
-                |this| {
-                    this.on_click(cx.listener(move |this, _, _, cx| this.connect(id.clone(), cx)))
-                },
-            );
+            let connect =
+                button(("connect", index), "connect").px_3().when(
+                    device.supported && !busy,
+                    |this| {
+                        this.on_click(cx.listener(move |this, _, _, cx| {
+                            this.connect(id.clone(), tag.clone(), cx)
+                        }))
+                    },
+                );
 
             list = list.child(
                 div()
@@ -329,7 +333,7 @@ impl Dashboard {
                                 div()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .child(format!("{}   {}", device.kind, device.id)),
+                                    .child(format!("{}   {}", device.kind, device.tag)),
                             ),
                     )
                     .child(div().w(px(72.)).text_sm().text_color(rgb(MUTED)).child(

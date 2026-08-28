@@ -17,7 +17,10 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 /// One entry of the scan result, as shown in the picker.
 #[derive(Debug, Clone)]
 pub struct Found {
+    /// Full peripheral id; what [`Command::Connect`] is matched against.
     pub id: String,
+    /// First 8 characters of the id, which is all the screen has room for.
+    pub tag: String,
     pub name: String,
     pub kind: &'static str,
     pub rssi: Option<i16>,
@@ -325,7 +328,8 @@ async fn discover(timeout: Duration) -> anyhow::Result<Vec<Discovered>> {
 
 fn describe(device: &Discovered) -> Found {
     Found {
-        id: short(&device.id),
+        id: device.id.clone(),
+        tag: short(&device.id),
         name: device.local_name.clone(),
         kind: device.kind.label(),
         rssi: device.rssi,
@@ -353,6 +357,7 @@ async fn simulate(commands: &mut UnboundedReceiver<Command>, updates: &UpdateSen
     let catalogue = [
         Found {
             id: "SIM-47L1".into(),
+            tag: "SIM-47L1".into(),
             name: "47L121000".into(),
             kind: "Pulse host 3.0",
             rssi: Some(-46),
@@ -360,6 +365,7 @@ async fn simulate(commands: &mut UnboundedReceiver<Command>, updates: &UpdateSen
         },
         Found {
             id: "SIM-D-LA".into(),
+            tag: "SIM-D-LA".into(),
             name: "D-LAB ESTIM01".into(),
             kind: "Pulse host 2.0",
             rssi: Some(-77),
