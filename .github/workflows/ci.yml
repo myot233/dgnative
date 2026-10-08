@@ -42,6 +42,16 @@ jobs:
       - run: cargo test --workspace --all-features
       # The protocol layer must stay usable with no IO and no transport.
       - run: cargo build -p dgnative --no-default-features
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Check wheel and Web Bluetooth behavior
+        run: |
+          node crates/dgnative-cli/tests/gacha-ui.cjs
+          python3 scripts/export-web-data.py --check
+          node --test web/tests/*.test.mjs
+          node web/tests/wheel-ui.cjs
 
   build:
     name: ${{ matrix.name }}

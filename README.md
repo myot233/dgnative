@@ -110,14 +110,33 @@ reconnecting.
 dgnative gacha --limit 30
 ```
 
-Open the printed address in a browser; whichever prize the wheel lands on is played at
-that prize's strength and duration. There are 13 prizes by default, from "Air" (0%, 3s)
+Open the printed address in a browser; after the wheel finishes spinning and recoils into
+place, its prize is played at that prize's strength and duration. By default, 50% of initial
+draws with a higher-strength prize available fake-stop on the initial result for 0.7 seconds,
+then slide to the nearest higher segment and recoil again. Distance is measured between
+segment centers around the circle, including the wrap: "Air" can upgrade to "Thunder".
+Output begins only after the final visible result settles. Set `--fakeout-chance 0` to
+disable this effect, or choose any percentage from 0 to 100. STOP cancels a pending
+draw as well as active output. There are 13 prizes by default, from "Air" (0%, 3s)
 to "Thunder" (100%, 5s), covering all 8 waveforms.
 
 **Prize strength is a percentage of the soft limit, not an absolute value** — so the
 wheel's output can never exceed `--limit`, and lowering it makes the whole prize pool
-lighter. Segments are drawn in proportion to their weight, so a segment's size is exactly
-its probability. A "Stop" button sits permanently on the page and interrupts at any time.
+lighter. Segments are drawn in proportion to the initial draw weights; the table shows
+final probabilities including fake-stop upgrades. A "Stop" button sits permanently on
+the page and interrupts at any time, including the apparent stop and the final slide.
+
+The **Auto** button schedules repeated spins. Set the minimum and maximum interval in
+seconds (1 to 3600, default 10 to 30); each wait is chosen uniformly from that range.
+The first wait starts when Auto is enabled, or after current playback finishes. Later
+waits start after each prize finishes playing, so automatic draws do not interrupt it.
+Changing the interval range reschedules a pending wait. Press Auto again to cancel future
+draws, or STOP to also cancel the current draw/output. STOP in another open page cancels
+Auto too. Reloading the page leaves Auto off.
+
+Run the deterministic wheel and Auto regression checks with
+`node crates/dgnative-cli/tests/gacha-ui.cjs`; these use a controlled browser clock and
+mock API responses without connecting to hardware.
 
 Prizes live in the `PRIZES` table in `crates/dgnative-cli/src/gacha.rs`; edit it and
 recompile. Two tests block the usual ways of breaking it: `prize_table_is_valid` checks
@@ -174,6 +193,22 @@ on macOS, Vulkan on Linux and DirectX on Windows. Building it on Linux needs
 the usual desktop development packages (`libwayland-dev`, `libxkbcommon-dev`,
 `libx11-dev`, `libfontconfig1-dev`, `libfreetype6-dev`, `libasound2-dev`); see
 `.github/workflows/ci.yml` for the exact list CI installs.
+
+## Web Bluetooth
+
+`web/` is a standalone static app with direct Web Bluetooth control, manual A/B
+controls, configuration, battery/status monitoring, offline preview, and the gacha
+wheel including fake-stops and Auto. It requires no native BLE service:
+
+```sh
+python3 -m http.server 8779 --bind 127.0.0.1 --directory web
+```
+
+Open `http://127.0.0.1:8779/` in Chrome, disconnect any native client, then select
+the device through the browser picker. Keep the page visible while playing;
+switching it to the background stops output and Auto. See [web/README.md](web/README.md)
+for the full flow, browser limitations, and tests. The native CLI and GUI remain
+available for native scanning, background playback, and LAN control.
 
 ## V3 usage
 

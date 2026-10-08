@@ -1,140 +1,9 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dgnative gacha wheel</title>
-<style>
-  :root {
-    --bg: #14171d;
-    --panel: #1d222b;
-    --line: #2c333f;
-    --text: #e6e9ef;
-    --muted: #8b95a7;
-    --accent: #d97a34;
-    --danger: #c8443c;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
-                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 28px 16px 48px;
-    gap: 20px;
-  }
-  h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: .04em; }
-  .sub { color: var(--muted); font-size: 13px; margin: -12px 0 0; }
+import { WAVES } from "./data.mjs";
 
-  .wheel-wrap { position: relative; width: min(88vw, 420px); aspect-ratio: 1; }
-  canvas { width: 100%; height: 100%; display: block; }
-  .pointer {
-    position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
-    width: 0; height: 0;
-    border-left: 13px solid transparent;
-    border-right: 13px solid transparent;
-    border-top: 24px solid var(--text);
-    filter: drop-shadow(0 2px 4px rgba(0,0,0,.5));
-  }
-  .hub {
-    position: absolute; inset: 0; margin: auto;
-    width: 34%; height: 34%; border-radius: 50%;
-    background: var(--panel); border: 2px solid var(--line);
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 2px; text-align: center; padding: 8px;
-  }
-  .hub .label { font-size: 17px; font-weight: 600; }
-  .hub .detail { font-size: 11px; color: var(--muted); }
+export function mountWheel(controller, requestStop) {
 
-  .controls { display: flex; gap: 12px; }
-  button {
-    font: inherit; font-weight: 600; color: var(--text);
-    padding: 12px 30px; border-radius: 10px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--panel);
-    transition: transform .06s, opacity .15s;
-  }
-  button:active:not(:disabled) { transform: translateY(1px); }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  #spin { background: var(--accent); border-color: var(--accent); color: #16120c; }
-  #stop { background: var(--danger); border-color: var(--danger); }
-  #auto[aria-pressed="true"] { background: #46708f; border-color: #46708f; }
-  .auto-settings { width: min(88vw, 420px); display: flex; flex-wrap: wrap; gap: 10px 16px; }
-  .auto-settings label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
-  .auto-settings input {
-    width: 72px; padding: 7px; border: 1px solid var(--line); border-radius: 6px;
-    background: var(--panel); color: var(--text); font: inherit;
-  }
-  #autoStatus { width: 100%; color: var(--muted); font-size: 12px; }
-  .controls { flex-wrap: wrap; justify-content: center; }
-
-  .status {
-    width: min(88vw, 420px); background: var(--panel);
-    border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
-    font-size: 13px; display: flex; flex-direction: column; gap: 8px;
-  }
-  .row { display: flex; justify-content: space-between; gap: 12px; }
-  .row span:first-child { color: var(--muted); }
-  .bar { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
-  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
-  .mono { font-variant-numeric: tabular-nums; }
-
-  table { width: min(88vw, 420px); border-collapse: collapse; font-size: 12.5px; }
-  th, td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 500; }
-  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
-  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 7px; }
-</style>
-</head>
-<body>
-
-<h1>dgnative gacha wheel</h1>
-<p class="sub">Prize strength is a percentage of the soft limit; the wheel never outputs above it</p>
-
-<div class="wheel-wrap">
-  <canvas id="wheel" width="840" height="840"></canvas>
-  <div class="pointer"></div>
-  <div class="hub">
-    <div class="label" id="hubLabel">Ready</div>
-    <div class="detail" id="hubDetail">Press the button below</div>
-  </div>
-</div>
-
-<div class="controls">
-  <button id="spin">S P I N</button>
-  <button id="auto" aria-pressed="false">Auto</button>
-  <button id="stop">S T O P</button>
-</div>
-
-<div class="auto-settings">
-  <label for="autoMin">Min interval (s)<input id="autoMin" type="number" min="1" max="3600" step="0.1" value="10"></label>
-  <label for="autoMax">Max interval (s)<input id="autoMax" type="number" min="1" max="3600" step="0.1" value="30"></label>
-  <div id="autoStatus" role="status">Auto off · intervals start after playback finishes</div>
-</div>
-
-<div class="status">
-  <div class="row"><span>Devices</span><span id="devices" class="mono">—</span></div>
-  <div class="row"><span>Soft limit</span><span id="limit" class="mono">—</span></div>
-  <div class="row"><span>Fake-stop chance</span><span id="fakeoutChance" class="mono">—</span></div>
-  <div class="row"><span>Current strength</span><span id="strength" class="mono">—</span></div>
-  <div class="bar"><i id="bar"></i></div>
-</div>
-
-<table>
-  <thead><tr><th>Prize</th><th>Waveform</th><th class="n">Strength</th><th class="n">Duration</th><th class="n">Final chance</th></tr></thead>
-  <tbody id="prizeTable"></tbody>
-</table>
-
-<script>
 // Display labels for the built-in waveforms; must match `builtin::ALL` in the library.
-const WAVE_NAMES = {
-  breathing: "Breathing", tide: "Tide", full: "Full power", staccato: "Staccato",
-  pulse: "Heartbeat", ramp: "Ramp", steps: "Steps", flutter: "Flutter",
-};
+const WAVE_NAMES = Object.fromEntries(WAVES.map(w => [w.name, w.label]));
 
 let prizes = [];
 let angles = [];      // [start, end] radians of each segment
@@ -320,9 +189,13 @@ async function refreshStatus() {
   if (refreshingStatus) return;
   refreshingStatus = true;
   try {
-    const response = await fetch("/api/status");
-    if (!response.ok) throw new Error("Status unavailable");
-    const s = await response.json();
+    const s = controller.status();
+    document.getElementById("spin").disabled = spinning || !s.online || s.version !== "v3";
+    document.getElementById("auto").disabled = !s.online || s.version !== "v3";
+    if (prizes[0]?.applied_chance !== s.fakeout_chance) {
+      prizes = controller.prizes().map(p => ({ ...p, applied_chance: s.fakeout_chance }));
+      renderTable();
+    }
     if (stopGeneration !== null && s.stop_generation !== stopGeneration) {
       ++spinGeneration;
       setAuto(false);
@@ -358,7 +231,7 @@ async function refreshStatus() {
 }
 
 async function spin() {
-  if (spinning) return;
+  if (spinning || !controller.online || controller.version !== "v3") return;
   spinning = true;
   autoDeadline = null;
   playbackUntil = 0;
@@ -370,9 +243,7 @@ async function spin() {
   document.getElementById("hubDetail").textContent = "";
 
   try {
-    const response = await fetch("/api/spin", { method: "POST" });
-    if (!response.ok) throw new Error("Draw failed");
-    const r = await response.json();
+    const r = await controller.draw();
     if (cancelled() || !await spinTo(r.preview_index, cancelled)) return;
     if (r.preview_index !== r.index) {
       const preview = prizes[r.preview_index];
@@ -388,13 +259,8 @@ async function spin() {
       `${r.prize.strength_pct}% / ${r.prize.seconds}s`;
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     if (cancelled()) return;
-    const started = await fetch("/api/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: r.token }),
-    });
-    if (!started.ok && !cancelled()) throw new Error("Draw was cancelled or could not start");
-    if (started.ok && !cancelled()) playbackUntil = performance.now() + r.prize.seconds * 1000;
+    await controller.start(r.token);
+    if (!cancelled()) playbackUntil = performance.now() + r.prize.seconds * 1000;
   } catch (error) {
     if (!cancelled()) {
       setAuto(false, "Auto stopped: " + error.message);
@@ -403,7 +269,7 @@ async function spin() {
     }
   } finally {
     spinning = false;
-    btn.disabled = false;
+    btn.disabled = !controller.online || controller.version !== "v3";
   }
 }
 
@@ -413,7 +279,7 @@ document.getElementById("auto").onclick = () => {
   if (autoEnabled) { setAuto(false); return; }
   try {
     autoRange();
-    if (!lastStatus || performance.now() - lastStatusAt > 2000) throw new Error("Connect to the service before enabling Auto");
+    if (!lastStatus || performance.now() - lastStatusAt > 2000) throw new Error("Connect a device or enable offline preview before enabling Auto");
     setAuto(true);
     autoTick();
   } catch (error) { setAuto(false, error.message); }
@@ -432,11 +298,11 @@ document.getElementById("stop").onclick = () => {
   ++spinGeneration;
   setAuto(false);
   playbackUntil = 0;
-  fetch("/api/stop", { method: "POST" });
+  requestStop();
 };
 
 (async () => {
-  prizes = await (await fetch("/api/prizes")).json();
+  prizes = controller.prizes();
   layout();
   drawWheel();
   renderTable();
@@ -444,6 +310,10 @@ document.getElementById("stop").onclick = () => {
   setInterval(refreshStatus, 250);
   setInterval(autoTick, 100);
 })();
-</script>
-</body>
-</html>
+
+controller.addEventListener("stop", () => {
+  ++spinGeneration; setAuto(false); playbackUntil = 0;
+  void refreshStatus();
+});
+
+}
