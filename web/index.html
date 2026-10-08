@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dgnative · Web Bluetooth</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div><h1>dgnative</h1><p class="subtitle">Web Bluetooth · Coyote control</p></div>
+    <div class="header-actions"><span id="connection" role="status">No device connected</span><button id="emergencyStop" class="danger">STOP ALL</button></div>
+  </header>
+  <p id="message" class="message" role="alert"></p>
+  <main class="workspace">
+    <div class="sidebar">
+      <section class="panel" aria-labelledby="connectionTitle">
+        <h2 id="connectionTitle">Connection</h2>
+        <label for="model">Device type<select id="model"><option value="v3">Coyote 3.0</option><option value="v2">Coyote 2.0</option></select></label>
+        <div class="button-row"><button id="connect">Connect device</button><button id="preview">Offline preview</button></div>
+        <p class="hint">Choose each device in the browser picker. Multiple devices can be connected.</p>
+        <div id="deviceList" class="device-list" aria-live="polite"></div>
+        <div class="button-row"><button id="readBattery">Read battery</button><button id="disconnectAll">Disconnect all</button></div>
+      </section>
+      <section class="panel" aria-labelledby="manualTitle">
+        <h2 id="manualTitle">Manual control</h2>
+        <label for="outputChannel">Output channel<select id="outputChannel"><option value="both">A + B</option><option value="a">A only</option><option value="b">B only</option></select></label>
+        <div class="channel-grid">
+          <div><label for="requestedA">A strength</label><div class="stepper"><button data-channel="a" data-nudge="-1" aria-label="Decrease A strength">−</button><input id="requestedA" type="number" min="0" max="20" step="1" value="0"><button data-channel="a" data-nudge="1" aria-label="Increase A strength">+</button></div></div>
+          <div><label for="requestedB">B strength</label><div class="stepper"><button data-channel="b" data-nudge="-1" aria-label="Decrease B strength">−</button><input id="requestedB" type="number" min="0" max="20" step="1" value="0"><button data-channel="b" data-nudge="1" aria-label="Increase B strength">+</button></div></div>
+        </div>
+        <div id="v3Controls"><label for="wave">Waveform<select id="wave"></select></label></div>
+        <div id="v2Controls" hidden>
+          <p class="hint">V2 raw waveform parameters. One frame lasts 100ms.</p>
+          <div class="field-grid"><label for="v2x">X<input id="v2x" type="number" min="0" max="31" value="1"></label><label for="v2y">Y<input id="v2y" type="number" min="0" max="1023" value="9"></label><label for="v2z">Z<input id="v2z" type="number" min="0" max="31" value="0"></label></div>
+        </div>
+        <label for="duration">Duration (seconds; 0 = until stopped)<input id="duration" type="number" min="0" max="86400" step="1" value="0"></label>
+        <button id="play">Play / apply strength</button>
+        <p class="hint">Arrow keys / + / − adjust strength. Space or Escape stops. Keep this page visible while playing.</p>
+      </section>
+      <section class="panel" aria-labelledby="configTitle">
+        <h2 id="configTitle">Configuration</h2>
+        <div class="field-grid"><label for="limitA">A soft limit<input id="limitA" type="number" min="0" max="200" step="1" value="20"></label><label for="limitB">B soft limit<input id="limitB" type="number" min="0" max="200" step="1" value="20"></label></div>
+        <label for="fakeoutSetting">Fake-stop chance (%)<input id="fakeoutSetting" type="number" min="0" max="100" step="1" value="50"></label>
+        <details><summary>Balance parameters (Coyote 3.0)</summary>
+          <div class="field-grid"><label for="frequencyA">A frequency balance<input id="frequencyA" type="number" min="0" max="255" value="160"></label><label for="frequencyB">B frequency balance<input id="frequencyB" type="number" min="0" max="255" value="160"></label><label for="intensityA">A intensity balance<input id="intensityA" type="number" min="0" max="255" value="0"></label><label for="intensityB">B intensity balance<input id="intensityB" type="number" min="0" max="255" value="0"></label></div>
+        </details>
+        <button id="applyConfig">Apply configuration</button>
+        <p id="limitNote" class="hint"></p>
+      </section>
+      <details class="panel"><summary>Activity</summary><ol id="events" class="event-log" aria-live="polite"></ol></details>
+    </div>
+    <section class="wheel-panel panel" aria-labelledby="wheelTitle">
+      <h2 id="wheelTitle">Gacha wheel</h2>
+      <p class="hint">Output begins after the final result settles. Strength is a percentage of the selected channels' limit.</p>
+      <div class="wheel-wrap">
+  <canvas id="wheel" width="840" height="840"></canvas>
+  <div class="pointer"></div>
+  <div class="hub">
+    <div class="label" id="hubLabel">Ready</div>
+    <div class="detail" id="hubDetail">Press the button below</div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="spin">S P I N</button>
+  <button id="auto" aria-pressed="false">Auto</button>
+  <button id="stop">S T O P</button>
+</div>
+
+<div class="auto-settings">
+  <label for="autoMin">Min interval (s)<input id="autoMin" type="number" min="1" max="3600" step="0.1" value="10"></label>
+  <label for="autoMax">Max interval (s)<input id="autoMax" type="number" min="1" max="3600" step="0.1" value="30"></label>
+  <div id="autoStatus" role="status">Auto off · intervals start after playback finishes</div>
+</div>
+
+<div class="status">
+  <div class="row"><span>Devices</span><span id="devices" class="mono">—</span></div>
+  <div class="row"><span>Soft limit</span><span id="limit" class="mono">—</span></div>
+  <div class="row"><span>Fake-stop chance</span><span id="fakeoutChance" class="mono">—</span></div>
+  <div class="row"><span>Current strength</span><span id="strength" class="mono">—</span></div>
+  <div class="bar"><i id="bar"></i></div>
+</div>
+
+<table>
+  <thead><tr><th>Prize</th><th>Waveform</th><th class="n">Strength</th><th class="n">Duration</th><th class="n">Final chance</th></tr></thead>
+  <tbody id="prizeTable"></tbody>
+</table>
+    </section>
+  </main>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
