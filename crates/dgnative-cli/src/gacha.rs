@@ -20,7 +20,7 @@ use dgnative::protocol::v3::{B0, B0_INTERVAL_MS, B1, Bf, Notification, StrengthQ
 use futures::StreamExt;
 use ipnet::IpNet;
 use rand::RngExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::{Channel, Device, SILENT, Target, connect_all};
@@ -36,7 +36,7 @@ pub struct Prize {
     pub strength_pct: u8,
     /// Duration in seconds.
     pub seconds: u64,
-    /// Draw weight; the larger it is, the more likely the prize.
+    /// Initial draw weight, before a possible fake stop upgrades the result.
     pub weight: u32,
     /// Wheel segment color.
     pub color: &'static str,
@@ -84,6 +84,64 @@ fn draw() -> usize {
     PRIZES.len() - 1
 }
 
+/// Find the higher-strength segment whose center is closest around the circular wheel.
+/// Doubled weight units represent the centers exactly, including the wrap at the pointer.
+fn nearest_higher(index: usize) -> Option<usize> {
+    let circumference = 2 * PRIZES.iter().map(|p| p.weight).sum::<u32>();
+    let mut at = 0;
+    let centers: Vec<u32> = PRIZES
+        .iter()
+        .map(|p| {
+            let center = at + p.weight;
+            at += 2 * p.weight;
+            center
+        })
+        .collect();
+    (0..PRIZES.len())
+        .filter(|&candidate| PRIZES[candidate].strength_pct > PRIZES[index].strength_pct)
+        .min_by_key(|&candidate| {
+            let distance = centers[candidate].abs_diff(centers[index]);
+            (
+                distance.min(circumference - distance),
+                PRIZES[candidate].strength_pct,
+                candidate,
+            )
+        })
+}
+
+/// A roll in 0..100 upgrades the initial result only when it is below the configured chance.
+fn final_index(preview: usize, chance: u8, roll: u8) -> usize {
+    if roll < chance {
+        nearest_higher(preview).unwrap_or(preview)
+    } else {
+        preview
+    }
+}
+
+/// Final odds include probability transferred from fake-stop previews to their higher result.
+fn final_probabilities(chance: u8) -> Vec<f64> {
+    let total = f64::from(PRIZES.iter().map(|p| p.weight).sum::<u32>());
+    let upgrade = f64::from(chance) / 100.0;
+    let mut probabilities = vec![0.0; PRIZES.len()];
+    for (index, prize) in PRIZES.iter().enumerate() {
+        let probability = f64::from(prize.weight) / total;
+        if let Some(higher) = nearest_higher(index) {
+            probabilities[index] += probability * (1.0 - upgrade);
+            probabilities[higher] += probability * upgrade;
+        } else {
+            probabilities[index] += probability;
+        }
+    }
+    probabilities
+}
+
+pub struct Options {
+    pub limit: u8,
+    pub channel: Channel,
+    pub offline: bool,
+    pub fakeout_chance: u8,
+}
+
 /// Runtime state polled by the page.
 #[derive(Clone, Serialize, Default)]
 struct Status {
@@ -93,6 +151,10 @@ struct Status {
     strengths: Vec<(u8, u8)>,
     /// Soft limit in effect.
     limit: u8,
+    /// Chance that an eligible initial draw will fake-stop before upgrading.
+    fakeout_chance: u8,
+    /// Changes whenever STOP is pressed, so every open page cancels its Auto timer.
+    stop_generation: u64,
     /// Name of the prize being played; null when idle.
     playing: Option<String>,
     /// Milliseconds remaining.
@@ -118,6 +180,13 @@ struct AppState {
     tx: mpsc::UnboundedSender<Event>,
     status: Arc<Mutex<Status>>,
     allow: Arc<Vec<IpNet>>,
+    pending: Arc<Mutex<Option<PendingSpin>>>,
+    fakeout_chance: u8,
+}
+
+struct PendingSpin {
+    token: String,
+    index: usize,
 }
 
 /// Parse an `--allow` value: a CIDR (`192.168.1.0/24`) or a single IP.
@@ -288,8 +357,25 @@ async fn page() -> impl IntoResponse {
     Html(include_str!("gacha.html"))
 }
 
-async fn prizes() -> impl IntoResponse {
-    Json(PRIZES)
+#[derive(Serialize)]
+struct PrizeOdds {
+    #[serde(flatten)]
+    prize: Prize,
+    final_chance_pct: f64,
+}
+
+async fn prizes(State(state): State<AppState>) -> impl IntoResponse {
+    Json(
+        PRIZES
+            .iter()
+            .copied()
+            .zip(final_probabilities(state.fakeout_chance))
+            .map(|(prize, probability)| PrizeOdds {
+                prize,
+                final_chance_pct: probability * 100.0,
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 async fn get_status(State(state): State<AppState>) -> impl IntoResponse {
@@ -299,24 +385,88 @@ async fn get_status(State(state): State<AppState>) -> impl IntoResponse {
 
 #[derive(Serialize)]
 struct SpinResult {
+    token: String,
+    preview_index: usize,
     index: usize,
     prize: Prize,
 }
 
-/// Draw: the server decides the result and starts output immediately; the page is responsible for
-/// spinning the pointer to the matching segment.
-async fn spin(State(state): State<AppState>) -> impl IntoResponse {
-    let index = draw();
-    let _ = state.tx.send(Event::Cmd(Cmd::Play(index)));
-    Json(SpinResult {
+/// Reserve a result while the page animates. A new draw also stops any previous output.
+async fn spin(
+    State(state): State<AppState>,
+) -> Result<Json<SpinResult>, (StatusCode, &'static str)> {
+    let mut pending = state
+        .pending
+        .lock()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "draw state unavailable"))?;
+    state
+        .tx
+        .send(Event::Cmd(Cmd::Stop))
+        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "device loop unavailable"))?;
+    let preview_index = draw();
+    let index = final_index(
+        preview_index,
+        state.fakeout_chance,
+        rand::rng().random_range(0..100),
+    );
+    let token = format!("{:032x}", rand::random::<u128>());
+    *pending = Some(PendingSpin {
+        token: token.clone(),
+        index,
+    });
+    Ok(Json(SpinResult {
+        token,
+        preview_index,
         index,
         prize: PRIZES[index],
-    })
+    }))
 }
 
-async fn stop(State(state): State<AppState>) -> impl IntoResponse {
-    let _ = state.tx.send(Event::Cmd(Cmd::Stop));
-    Json(serde_json::json!({ "ok": true }))
+#[derive(Deserialize)]
+struct StartRequest {
+    token: String,
+}
+
+/// Start only the reserved result, once the page has finished its settling animation.
+async fn start(
+    State(state): State<AppState>,
+    Json(request): Json<StartRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, &'static str)> {
+    let mut pending = state
+        .pending
+        .lock()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "draw state unavailable"))?;
+    let Some(draw) = pending.as_ref().filter(|draw| draw.token == request.token) else {
+        return Err((
+            StatusCode::CONFLICT,
+            "draw was cancelled or already started",
+        ));
+    };
+    // Keep the lock through enqueueing so STOP cannot be followed by a stale Play command.
+    state
+        .tx
+        .send(Event::Cmd(Cmd::Play(draw.index)))
+        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "device loop unavailable"))?;
+    *pending = None;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn stop(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, &'static str)> {
+    let mut pending = state
+        .pending
+        .lock()
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "draw state unavailable"))?;
+    *pending = None;
+    if let Ok(mut status) = state.status.lock() {
+        status.stop_generation = status.stop_generation.wrapping_add(1);
+    }
+    state
+        .tx
+        .send(Event::Cmd(Cmd::Stop))
+        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "device loop unavailable"))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// Start the gacha service: connect devices, write the soft limit, run the 100ms loop and the
@@ -329,10 +479,14 @@ pub async fn serve(
     bind: IpAddr,
     port: u16,
     allow: Vec<IpNet>,
-    limit: u8,
-    channel: Channel,
-    offline: bool,
+    options: Options,
 ) -> Result<()> {
+    let Options {
+        limit,
+        channel,
+        offline,
+        fakeout_chance,
+    } = options;
     // Binding to a non-loopback address means other machines can trigger output, so who may
     // access it must be stated explicitly
     if !bind.is_loopback() && allow.is_empty() {
@@ -368,6 +522,7 @@ pub async fn serve(
         devices: devices.iter().map(|d| d.tag.clone()).collect(),
         strengths: vec![(0, 0); devices.len()],
         limit,
+        fakeout_chance,
         ..Status::default()
     }));
 
@@ -390,12 +545,15 @@ pub async fn serve(
         tx: tx.clone(),
         status: Arc::clone(&status),
         allow: Arc::new(allow.clone()),
+        pending: Arc::new(Mutex::new(None)),
+        fakeout_chance,
     };
     let app = Router::new()
         .route("/", get(page))
         .route("/api/prizes", get(prizes))
         .route("/api/status", get(get_status))
         .route("/api/spin", post(spin))
+        .route("/api/start", post(start))
         .route("/api/stop", post(stop))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state);
@@ -422,6 +580,7 @@ pub async fn serve(
     println!(
         "Prize strength is a percentage of the soft limit {limit} and never exceeds it. Ctrl-C to exit.\n"
     );
+    println!("Fake-stop chance: {fakeout_chance}% of draws with a higher segment nearby.\n");
 
     let loop_handle = tokio::spawn(runner(
         Arc::clone(&devices),
@@ -462,6 +621,175 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_state() -> (AppState, mpsc::UnboundedReceiver<Event>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            AppState {
+                tx,
+                status: Arc::new(Mutex::new(Status::default())),
+                allow: Arc::new(Vec::new()),
+                pending: Arc::new(Mutex::new(None)),
+                fakeout_chance: 50,
+            },
+            rx,
+        )
+    }
+
+    #[test]
+    fn upgrades_follow_circular_distance_and_only_increase_strength() {
+        let expected = [12, 2, 3, 4, 5, 6, 8, 8, 10, 10, 12, 12];
+        for (index, higher) in expected.into_iter().enumerate() {
+            assert_eq!(nearest_higher(index), Some(higher));
+            assert!(PRIZES[higher].strength_pct > PRIZES[index].strength_pct);
+        }
+        assert_eq!(nearest_higher(12), None);
+    }
+
+    #[test]
+    fn fake_stop_chance_has_exact_boundaries() {
+        for roll in 0..100 {
+            assert_eq!(final_index(0, 0, roll), 0);
+            assert_eq!(final_index(0, 100, roll), 12);
+            assert_eq!(final_index(12, 100, roll), 12);
+            assert_eq!(final_index(0, 50, roll), if roll < 50 { 12 } else { 0 });
+        }
+    }
+
+    #[test]
+    fn final_odds_account_for_upgrades_and_sum_to_one() {
+        let total = f64::from(PRIZES.iter().map(|p| p.weight).sum::<u32>());
+        for chance in [0, 50, 100] {
+            let probabilities = final_probabilities(chance);
+            assert!((probabilities.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+            assert!(probabilities.iter().all(|p| *p >= 0.0 && *p <= 1.0));
+        }
+        for (index, probability) in final_probabilities(0).into_iter().enumerate() {
+            assert!((probability - f64::from(PRIZES[index].weight) / total).abs() < 1e-12);
+        }
+        let probabilities = final_probabilities(50);
+        assert!((probabilities[0] - 8.0 / total).abs() < 1e-12);
+        assert!((probabilities[12] - (3.0 + 0.5 * (16.0 + 5.0 + 4.0)) / total).abs() < 1e-12);
+    }
+
+    #[tokio::test]
+    async fn fake_stop_reserves_and_plays_only_the_final_visible_result() {
+        let (mut state, mut rx) = test_state();
+        state.fakeout_chance = 100;
+        let Json(result) = spin(State(state.clone())).await.unwrap();
+        assert_eq!(
+            result.index,
+            nearest_higher(result.preview_index).unwrap_or(result.preview_index)
+        );
+        assert_eq!(result.prize.label, PRIZES[result.index].label);
+        assert_eq!(
+            state.pending.lock().unwrap().as_ref().unwrap().index,
+            result.index
+        );
+        assert!(matches!(rx.try_recv().unwrap(), Event::Cmd(Cmd::Stop)));
+        assert!(rx.try_recv().is_err());
+        let _ = start(
+            State(state),
+            Json(StartRequest {
+                token: result.token,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(rx.try_recv().unwrap(), Event::Cmd(Cmd::Play(index)) if index == result.index)
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn draw_waits_for_animation_completion_and_starts_only_once() {
+        let (state, mut rx) = test_state();
+        let Json(result) = spin(State(state.clone())).await.unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), Event::Cmd(Cmd::Stop)));
+        assert!(rx.try_recv().is_err(), "drawing must not start output");
+
+        let _ = start(
+            State(state.clone()),
+            Json(StartRequest {
+                token: result.token.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Event::Cmd(Cmd::Play(index)) if index == result.index
+        ));
+        assert!(matches!(
+            start(
+                State(state),
+                Json(StartRequest {
+                    token: result.token
+                })
+            )
+            .await,
+            Err((StatusCode::CONFLICT, _))
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "replaying a token must not start output"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_a_draw_before_output_starts() {
+        let (state, mut rx) = test_state();
+        let Json(result) = spin(State(state.clone())).await.unwrap();
+        let _ = stop(State(state.clone())).await.unwrap();
+        assert_eq!(state.status.lock().unwrap().stop_generation, 1);
+        assert!(matches!(
+            start(
+                State(state),
+                Json(StartRequest {
+                    token: result.token
+                })
+            )
+            .await,
+            Err((StatusCode::CONFLICT, _))
+        ));
+        assert!(matches!(rx.try_recv().unwrap(), Event::Cmd(Cmd::Stop)));
+        assert!(matches!(rx.try_recv().unwrap(), Event::Cmd(Cmd::Stop)));
+        assert!(
+            rx.try_recv().is_err(),
+            "a cancelled animation must not revive output"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_animation_cannot_start_or_cancel_a_newer_draw() {
+        let (state, mut rx) = test_state();
+        let Json(old) = spin(State(state.clone())).await.unwrap();
+        let Json(current) = spin(State(state.clone())).await.unwrap();
+        assert!(matches!(
+            start(
+                State(state.clone()),
+                Json(StartRequest { token: old.token })
+            )
+            .await,
+            Err((StatusCode::CONFLICT, _))
+        ));
+        let _ = start(
+            State(state),
+            Json(StartRequest {
+                token: current.token,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), Event::Cmd(Cmd::Stop)));
+        assert!(matches!(rx.try_recv().unwrap(), Event::Cmd(Cmd::Stop)));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Event::Cmd(Cmd::Play(index)) if index == current.index
+        ));
+        assert!(rx.try_recv().is_err());
+    }
 
     fn allowed(nets: &[&str], peer: &str) -> bool {
         let nets: Vec<IpNet> = nets.iter().map(|n| parse_allow(n).unwrap()).collect();

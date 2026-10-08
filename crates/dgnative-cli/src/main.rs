@@ -118,6 +118,9 @@ enum Command {
         /// Do not connect any device, just serve the web page (for tuning the prize pool / previewing the wheel)
         #[arg(long)]
         offline: bool,
+        /// Chance (%) to fake-stop on the initial prize, then move to the nearest higher segment
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u8).range(0..=100))]
+        fakeout_chance: u8,
     },
 
     /// Watch device events (strength changes, battery)
@@ -221,11 +224,24 @@ async fn main() -> Result<()> {
             limit,
             channel,
             offline,
+            fakeout_chance,
         } => {
             if limit > MAX_STRENGTH {
                 bail!("--limit = {limit} is out of range 0-{MAX_STRENGTH}");
             }
-            gacha::serve(&target, bind, port, allow, limit, channel, offline).await
+            gacha::serve(
+                &target,
+                bind,
+                port,
+                allow,
+                gacha::Options {
+                    limit,
+                    channel,
+                    offline,
+                    fakeout_chance,
+                },
+            )
+            .await
         }
         Command::Monitor => cmd_monitor(&target).await,
         Command::Stop => cmd_stop(&target).await,

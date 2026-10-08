@@ -62,6 +62,15 @@
   button:disabled { opacity: .45; cursor: not-allowed; }
   #spin { background: var(--accent); border-color: var(--accent); color: #16120c; }
   #stop { background: var(--danger); border-color: var(--danger); }
+  #auto[aria-pressed="true"] { background: #46708f; border-color: #46708f; }
+  .auto-settings { width: min(88vw, 420px); display: flex; flex-wrap: wrap; gap: 10px 16px; }
+  .auto-settings label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .auto-settings input {
+    width: 72px; padding: 7px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel); color: var(--text); font: inherit;
+  }
+  #autoStatus { width: 100%; color: var(--muted); font-size: 12px; }
+  .controls { flex-wrap: wrap; justify-content: center; }
 
   .status {
     width: min(88vw, 420px); background: var(--panel);
@@ -97,18 +106,26 @@
 
 <div class="controls">
   <button id="spin">S P I N</button>
+  <button id="auto" aria-pressed="false">Auto</button>
   <button id="stop">S T O P</button>
+</div>
+
+<div class="auto-settings">
+  <label for="autoMin">Min interval (s)<input id="autoMin" type="number" min="1" max="3600" step="0.1" value="10"></label>
+  <label for="autoMax">Max interval (s)<input id="autoMax" type="number" min="1" max="3600" step="0.1" value="30"></label>
+  <div id="autoStatus" role="status">Auto off · intervals start after playback finishes</div>
 </div>
 
 <div class="status">
   <div class="row"><span>Devices</span><span id="devices" class="mono">—</span></div>
   <div class="row"><span>Soft limit</span><span id="limit" class="mono">—</span></div>
+  <div class="row"><span>Fake-stop chance</span><span id="fakeoutChance" class="mono">—</span></div>
   <div class="row"><span>Current strength</span><span id="strength" class="mono">—</span></div>
   <div class="bar"><i id="bar"></i></div>
 </div>
 
 <table>
-  <thead><tr><th>Prize</th><th>Waveform</th><th class="n">Strength</th><th class="n">Duration</th><th class="n">Chance</th></tr></thead>
+  <thead><tr><th>Prize</th><th>Waveform</th><th class="n">Strength</th><th class="n">Duration</th><th class="n">Final chance</th></tr></thead>
   <tbody id="prizeTable"></tbody>
 </table>
 
@@ -123,11 +140,19 @@ let prizes = [];
 let angles = [];      // [start, end] radians of each segment
 let rotation = 0;     // current wheel angle
 let spinning = false;
+let spinGeneration = 0;
+let autoEnabled = false;
+let autoDeadline = null;
+let playbackUntil = 0;
+let lastStatus = null;
+let lastStatusAt = 0;
+let stopGeneration = null;
+let refreshingStatus = false;
 
 const canvas = document.getElementById("wheel");
 const ctx = canvas.getContext("2d");
 
-// Segment size follows weight: likelier prizes get larger segments, so visuals match probability
+// Segment size follows the initial draw weight; the table accounts for fake-stop upgrades.
 function layout() {
   const total = prizes.reduce((s, p) => s + p.weight, 0);
   let at = -Math.PI / 2;   // start straight up (pointer position)
@@ -190,48 +215,125 @@ function drawWheel() {
 }
 
 const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const easeOutBack = t => {
+  const x = t - 1;
+  return 1 + 2.70158 * x * x * x + 1.70158 * x * x;
+};
 
-// Rotate the center of segment `index` to the pointer (straight up)
-function spinTo(index, ms = 4200) {
+function animateRotation(target, ms, ease, cancelled) {
   return new Promise(resolve => {
-    const [a0, a1] = angles[index];
-    const center = (a0 + a1) / 2;
-    // Target: rotation + center ≡ -π/2 (mod 2π), plus 5 extra turns
-    const twoPi = Math.PI * 2;
-    let delta = (-Math.PI / 2 - center - rotation) % twoPi;
-    if (delta < 0) delta += twoPi;
-    const target = rotation + delta + twoPi * 5;
-
     const from = rotation, start = performance.now();
     function frame(now) {
+      if (cancelled()) { resolve(false); return; }
       const t = Math.min(1, (now - start) / ms);
-      rotation = from + (target - from) * easeOut(t);
+      rotation = from + (target - from) * ease(t);
       drawWheel();
       if (t < 1) requestAnimationFrame(frame);
-      else { rotation %= twoPi; resolve(); }
+      else resolve(true);
     }
     requestAnimationFrame(frame);
   });
 }
 
+// Overshoot the target, then recoil to its center before output can begin.
+async function spinTo(index, cancelled, shortHop = false) {
+  const [a0, a1] = angles[index];
+  const center = (a0 + a1) / 2;
+  // The initial spin makes five extra turns; a fake-stop hop takes the shortest circular path.
+  const twoPi = Math.PI * 2;
+  let delta = (-Math.PI / 2 - center - rotation) % twoPi;
+  if (delta < 0) delta += twoPi;
+  if (shortHop && delta > Math.PI) delta -= twoPi;
+  const target = rotation + delta + (shortHop ? 0 : twoPi * 5);
+
+  const overshoot = Math.min(0.14, (a1 - a0) * 0.3) * (Math.sign(delta) || 1);
+  if (!await animateRotation(target + overshoot, shortHop ? 850 : 3600,
+    shortHop ? easeInOut : easeOut, cancelled)) return false;
+  if (!await animateRotation(target, shortHop ? 450 : 600, easeOutBack, cancelled)) return false;
+  rotation %= twoPi;
+  // Give the final canvas frame time to paint before requesting device output.
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return !cancelled();
+}
+
 function renderTable() {
-  const total = prizes.reduce((s, p) => s + p.weight, 0);
   document.getElementById("prizeTable").innerHTML = prizes.map(p => `
     <tr>
       <td><span class="swatch" style="background:${p.color}"></span>${p.label}</td>
       <td>${WAVE_NAMES[p.wave] || p.wave}</td>
       <td class="n">${p.strength_pct}%</td>
       <td class="n">${p.seconds}s</td>
-      <td class="n">${(p.weight / total * 100).toFixed(1)}%</td>
+      <td class="n">${p.final_chance_pct.toFixed(1)}%</td>
     </tr>`).join("");
 }
 
+function autoRange() {
+  const min = Number(document.getElementById("autoMin").value);
+  const max = Number(document.getElementById("autoMax").value);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min < 1 || max > 3600 || max < min) {
+    throw new Error("Choose intervals from 1 to 3600 seconds, with max at least min");
+  }
+  return [min, max];
+}
+
+function setAuto(enabled, message) {
+  autoEnabled = enabled;
+  autoDeadline = null;
+  const button = document.getElementById("auto");
+  button.setAttribute("aria-pressed", String(enabled));
+  button.textContent = enabled ? "Auto: On" : "Auto";
+  document.getElementById("autoStatus").textContent = message ||
+    (enabled ? "Waiting for the next spin" : "Auto off · intervals start after playback finishes");
+}
+
+function autoTick() {
+  if (!autoEnabled) return;
+  if (!lastStatus || performance.now() - lastStatusAt > 2000) {
+    // A background tab may throttle timers; refresh before deciding whether output is idle.
+    void refreshStatus();
+    return;
+  }
+  const status = document.getElementById("autoStatus");
+  if (spinning) { status.textContent = "Spinning…"; return; }
+  if (lastStatus.playing || performance.now() < playbackUntil) {
+    autoDeadline = null;
+    status.textContent = "Waiting for playback to finish";
+    return;
+  }
+  if (autoDeadline === null) {
+    try {
+      const [min, max] = autoRange();
+      autoDeadline = performance.now() + (min + Math.random() * (max - min)) * 1000;
+    } catch (error) { setAuto(false, error.message); return; }
+  }
+  const remaining = autoDeadline - performance.now();
+  if (remaining <= 0) {
+    autoDeadline = null;
+    void spin();
+  } else {
+    status.textContent = `Next spin in ${(remaining / 1000).toFixed(1)}s`;
+  }
+}
+
 async function refreshStatus() {
+  if (refreshingStatus) return;
+  refreshingStatus = true;
   try {
-    const s = await (await fetch("/api/status")).json();
+    const response = await fetch("/api/status");
+    if (!response.ok) throw new Error("Status unavailable");
+    const s = await response.json();
+    if (stopGeneration !== null && s.stop_generation !== stopGeneration) {
+      ++spinGeneration;
+      setAuto(false);
+    }
+    stopGeneration = s.stop_generation;
+    lastStatus = s;
+    lastStatusAt = performance.now();
     document.getElementById("devices").textContent =
       s.devices.length ? s.devices.join(" / ") : "none";
     document.getElementById("limit").textContent = s.limit;
+    document.getElementById("fakeoutChance").textContent = `${s.fakeout_chance}%`;
     document.getElementById("strength").textContent =
       s.strengths.map(([a, b]) => `A${a} B${b}`).join("  ") || "—";
 
@@ -250,32 +352,88 @@ async function refreshStatus() {
         bar.style.width = "0";
       }
     }
-  } catch (e) { /* service exited, ignore */ }
+    if (autoEnabled) autoTick();
+  } catch (e) { if (autoEnabled) setAuto(false, "Auto stopped: connection lost"); }
+  finally { refreshingStatus = false; }
 }
 
-document.getElementById("spin").onclick = async () => {
+async function spin() {
   if (spinning) return;
   spinning = true;
+  autoDeadline = null;
+  playbackUntil = 0;
+  const generation = ++spinGeneration;
+  const cancelled = () => generation !== spinGeneration;
   const btn = document.getElementById("spin");
   btn.disabled = true;
   document.getElementById("hubLabel").textContent = "…";
   document.getElementById("hubDetail").textContent = "";
 
   try {
-    // The server picks the result and starts output immediately; the animation just turns the pointer there
-    const r = await (await fetch("/api/spin", { method: "POST" })).json();
-    await spinTo(r.index);
+    const response = await fetch("/api/spin", { method: "POST" });
+    if (!response.ok) throw new Error("Draw failed");
+    const r = await response.json();
+    if (cancelled() || !await spinTo(r.preview_index, cancelled)) return;
+    if (r.preview_index !== r.index) {
+      const preview = prizes[r.preview_index];
+      document.getElementById("hubLabel").textContent = preview.label;
+      document.getElementById("hubDetail").textContent =
+        `${preview.strength_pct}% / ${preview.seconds}s`;
+      // Hold the apparent result without sending any output, then reveal the higher result.
+      if (!await animateRotation(rotation, 700, easeOut, cancelled)) return;
+      if (!await spinTo(r.index, cancelled, true)) return;
+    }
     document.getElementById("hubLabel").textContent = r.prize.label;
     document.getElementById("hubDetail").textContent =
       `${r.prize.strength_pct}% / ${r.prize.seconds}s`;
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (cancelled()) return;
+    const started = await fetch("/api/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: r.token }),
+    });
+    if (!started.ok && !cancelled()) throw new Error("Draw was cancelled or could not start");
+    if (started.ok && !cancelled()) playbackUntil = performance.now() + r.prize.seconds * 1000;
+  } catch (error) {
+    if (!cancelled()) {
+      setAuto(false, "Auto stopped: " + error.message);
+      document.getElementById("hubLabel").textContent = "Error";
+      document.getElementById("hubDetail").textContent = error.message;
+    }
   } finally {
     spinning = false;
     btn.disabled = false;
   }
+}
+
+document.getElementById("spin").onclick = spin;
+
+document.getElementById("auto").onclick = () => {
+  if (autoEnabled) { setAuto(false); return; }
+  try {
+    autoRange();
+    if (!lastStatus || performance.now() - lastStatusAt > 2000) throw new Error("Connect to the service before enabling Auto");
+    setAuto(true);
+    autoTick();
+  } catch (error) { setAuto(false, error.message); }
 };
 
-document.getElementById("stop").onclick = () =>
+for (const id of ["autoMin", "autoMax"]) {
+  document.getElementById(id).onchange = () => {
+    if (!autoEnabled) return;
+    try { autoRange(); } catch (error) { setAuto(false, error.message); return; }
+    autoDeadline = null;
+    autoTick();
+  };
+}
+
+document.getElementById("stop").onclick = () => {
+  ++spinGeneration;
+  setAuto(false);
+  playbackUntil = 0;
   fetch("/api/stop", { method: "POST" });
+};
 
 (async () => {
   prizes = await (await fetch("/api/prizes")).json();
@@ -284,6 +442,7 @@ document.getElementById("stop").onclick = () =>
   renderTable();
   refreshStatus();
   setInterval(refreshStatus, 250);
+  setInterval(autoTick, 100);
 })();
 </script>
 </body>
